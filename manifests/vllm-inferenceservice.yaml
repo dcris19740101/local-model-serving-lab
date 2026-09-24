@@ -1,0 +1,74 @@
+# Uses a custom container spec (predictor.containers), NOT the managed
+# predictor.model + ClusterServingRuntime pattern. Reason, confirmed by testing:
+# the built-in kserve-vllmserver runtime pins image vllm/vllm-openai:v0.20.0 with
+# a hardcoded command: [python, -m, vllm.entrypoints.openai.api_server], but that
+# image tag has no plain `python` binary on PATH, only python3, so the pod
+# crash-loops with "exec: python: executable file not found in $PATH". The managed
+# runtime also auto-injects --model=/mnt/models (assuming a storageUri-based
+# deployment via KServe's storage-initializer), which collides with our own
+# --model=Qwen/Qwen2.5-7B-Instruct-AWQ arg, since this guide pulls from Hugging
+# Face via HF_TOKEN instead of KServe-managed storage.
+#
+# The fix: specify the container directly, using the same image and args already
+# validated in the Step 4 standalone docker run test. This bypasses the managed
+# runtime (and its storage-initializer/agent sidecar) entirely.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen-vllm
+  # Required for the standalone KEDA ScaledObject (manifests/vllm-keda-scaledobject.yaml)
+  # to work at all: KServe creates its own HPA for the predictor Deployment by default
+  # in raw/Standard mode, and KEDA's admission webhook refuses to attach a ScaledObject
+  # to a Deployment an HPA already manages ("already managed by the hpa" error, confirmed
+  # by testing). "external" tells KServe to create neither its own HPA nor a KServe-managed
+  # KEDA object, handing scaling fully to the ScaledObject applied separately.
+  annotations:
+    serving.kserve.io/autoscalerClass: "external"
+spec:
+  predictor:
+    containers:
+      - name: kserve-container
+        image: vllm/vllm-openai:latest
+        args:
+          - --port=8080
+          - --served-model-name=qwen-vllm
+          # AWQ (4-bit), not full precision: on a 16GB card, full-precision
+          # Qwen2.5-7B-Instruct's 14.29 GiB of weights leaves under 1.2 GiB free
+          # and OOMs before KV cache is allocated. Confirmed on an RTX 5080
+          # (15.45 GiB usable). A quantized checkpoint fixes this; a
+          # --gpu-memory-utilization tweak does not, since the weights alone
+          # already exceed budget.
+          - --model=Qwen/Qwen2.5-7B-Instruct-AWQ
+          - --quantization=awq
+          - --max-model-len=4096
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        # Explicit memory/cpu needed: confirmed by testing, leaving these unset let
+        # KServe's webhook inject a default of exactly cpu: 1 / memory: 2Gi (request
+        # and limit), which OOMKilled the pod. This is host RAM, separate from GPU
+        # VRAM, driven by tokenizer, CUDA graph capture bookkeeping, and multiprocessing
+        # engine-core overhead, not by the AWQ checkpoint size already handled above.
+        # 8Gi got it running but logs showed only 1.71 GiB free at that point (tight
+        # under concurrent load); 12Gi builds in real headroom, costless on 64GB host RAM.
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 12Gi
+            nvidia.com/gpu: "1"
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token-secret
+                key: token
+---
+# Test with (no ingress controller in this guide, port-forward instead):
+#   kubectl get inferenceservice qwen-vllm
+#   kubectl port-forward svc/qwen-vllm-predictor 8080:80
+#   curl -v http://localhost:8080/v1/completions \
+#     -H "Content-Type: application/json" \
+#     -d '{"model": "qwen-vllm", "prompt": "Explain PagedAttention in one sentence.", "max_tokens": 50}'

@@ -1,0 +1,33 @@
+# Wires vLLM's native /metrics endpoint into kube-prometheus-stack's Prometheus.
+# Key metrics once scraped: vllm:prompt_tokens_total, vllm:generation_tokens_total
+# (rate() for tokens/sec), vllm:time_to_first_token_seconds, vllm:gpu_cache_usage_perc,
+# vllm:num_requests_waiting, vllm:e2e_request_latency_seconds
+#
+# Three things confirmed by testing, none of them guessable from KServe's docs alone:
+# 1. namespaceSelector is required: this ServiceMonitor lives in `monitoring`, but the
+#    qwen-vllm-predictor Service lives in `default`. Without it, a ServiceMonitor only
+#    looks within its own namespace, distinct from the cluster-wide selector fix applied
+#    to the Prometheus CR itself (that controls which ServiceMonitors Prometheus watches,
+#    not which namespace any single one searches for Services).
+# 2. The label is `app: isvc.qwen-vllm-predictor` (KServe prefixes it with "isvc."),
+#    not the plain predictor name.
+# 3. The Service's port has no name at all (just `port: 80, targetPort: 8080`), so
+#    matching by `port: http` can never work; `targetPort: 8080` matches by the actual
+#    container port number instead, since KServe's controller owns this Service and
+#    would revert a manually added port name on its next reconcile.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-metrics
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      app: isvc.qwen-vllm-predictor
+  endpoints:
+    - targetPort: 8080
+      path: /metrics
+      interval: 15s

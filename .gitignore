@@ -1,0 +1,14 @@
+# Secrets, never commit
+*.token
+hf-token-secret.yaml
+.env
+
+# Local model artifacts
+*.joblib
+*.pkl
+models/
+
+# OS/editor noise
+.DS_Store
+.vscode/
+*.swp

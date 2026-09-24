@@ -1,0 +1,44 @@
+# Real scale-from-zero-on-request for the vLLM predictor, using KEDA's HTTP Add-on.
+#
+# Why this exists: a plain ScaledObject can scale a Deployment to zero, but nothing
+# in raw/Standard KServe mode can then wake it back up on an incoming request, there's
+# no backing pod, so a curl or port-forward just hits a dead end. Knative solves this
+# with an "activator" component; KServe's raw mode + plain KEDA has no equivalent.
+# Confirmed directly against KServe's own docs: "Scale from Zero is currently not
+# supported in Standard mode for HTTP requests." The HTTP Add-on's interceptor is
+# that missing piece.
+#
+# This uses HTTPScaledObject (http.keda.sh/v1alpha1), NOT a hand-written InterceptorRoute
+# + standalone ScaledObject with an external-push trigger. Both exist as APIs in this
+# chart, but confirmed by testing: the currently-installed external-scaler component
+# only correctly resolves GetMetricSpec for ScaledObjects it generates itself from an
+# HTTPScaledObject (it links them via a "Http Scaled Object" field in the trigger
+# metadata). A hand-written ScaledObject with just a scalerAddress, no HTTPScaledObject
+# link, fails with "unable to get the linked HTTPScaledObject for ScaledObject" and
+# never reports a metric, so the Deployment never scales up. Apply only this one
+# resource; KServe's own operator creates and owns the underlying ScaledObject for you.
+#
+# Traffic must go THROUGH the interceptor's Service (keda-add-ons-http-interceptor-proxy
+# in the keda namespace), not directly to qwen-vllm-predictor's own Service, with a
+# Host header matching spec.hosts below. See the README/article for the full test flow.
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: qwen-vllm-httpscaledobject
+spec:
+  hosts:
+    - qwen-vllm.local
+  scaleTargetRef:
+    name: qwen-vllm-predictor
+    kind: Deployment
+    apiVersion: apps/v1
+    service: qwen-vllm-predictor
+    port: 80
+  replicas:
+    min: 0
+    max: 1
+  scalingMetric:
+    requestRate:
+      targetValue: 5
+      window: 1m
+      granularity: 1s
