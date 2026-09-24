@@ -4,8 +4,8 @@ Serving LLMs and traditional ML models locally on a single consumer GPU, using K
 
 This repo is the companion code for a two-part write-up:
 
-- **Part 1**: [Building an AI/ML Workstation with an RTX 5080](#) — Ubuntu, GPU driver debugging, dual-boot setup
-- **Part 2**: [Serving LLMs with KServe and vLLM on a Consumer GPU](#) — this repo
+- **Part 1**: [Building an AI/ML Workstation with an RTX 5080](https://medium.com/@dcris19740101/building-an-ai-ml-workstation-with-an-rtx-5080-ubuntu-and-two-long-nights-of-gpu-driver-debugging-ee250910a1e3) — Ubuntu, GPU driver debugging, dual-boot setup
+- **Part 2**: [Serving LLMs with KServe and vLLM on a Consumer GPU](https://medium.com/@dcris19740101/serving-llms-with-kserve-and-vllm-on-a-consumer-gpu-a-local-kubernetes-build-log-a5c8eeed69f3) — this repo
 
 ## What's here
 
